@@ -1,0 +1,105 @@
+#!/bin/bash
+
+
+#XXX
+[ -n "$K8S_NS" ] && ns="-n $K8S_NS"
+
+IMAGE=ljocha/gromacs:2021-3
+
+name=$(LC_CTYPE=C tr -cd '[:digit:][:lower:]' </dev/urandom | head -c 9)
+yaml=/tmp/gmx-$name.yaml
+run=gmx-$name.sh
+
+mpi=1
+input=
+while getopts n:i: opt; do case "$opt" in
+	n) mpi=$OPTARG;;
+	i) input="$OPTARG";;
+	esac
+done
+shift $(($OPTIND - 1))
+
+args=''
+for a in "$@"; do
+	args="$args '$a'"
+done
+
+cat - >$run <<EOF
+#!/bin/bash
+
+echo "$input" | tr , '\012' | mpirun -np $mpi gmx $args >gmx-$name.out 2>gmx-$name.err
+
+echo \$? >gmx-$name.ret.\$\$
+mv gmx-$name.ret.\$\$ gmx-$name.ret
+EOF
+
+chmod +x $run
+
+
+CPU=1
+GPU=0
+
+if [ "$1" = mdrun -o $(basename $0) = mdrun ]; then
+	GPU=1
+	omp=1
+	for a in "$@"; do
+		[ $omp = y ]; omp=$a
+		[ $a = -ntomp ] && omp=y
+	done
+	CPU=$(($omp * $mpi))
+fi
+
+MEM=$((4 * $CPU))Gi
+
+cat - >$yaml <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gmx-$name
+spec:
+  ttlSecondsAfterFinished: 20
+  template:
+    spec:
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1002
+        fsGroup: 1002
+        fsGroupChangePolicy: "OnRootMismatch"
+      containers:
+      - name: gmx
+        image: $IMAGE
+        resources:
+          requests:
+            cpu: $CPU
+            memory: $MEM
+          limits:
+            nvidia.com/gpu: $GPU
+        volumeMounts:
+          - mountPath: /work
+            name: work-volume
+        workingDir: /work/${WORKDIR_RELATIVE}
+        command: [ "./$run" ]
+      restartPolicy: Never
+      volumes:
+        - name: work-volume
+          persistentVolumeClaim:
+            claimName: ${WORK_VOLUME:=test-volume}
+EOF
+
+#cat $yaml
+
+kubectl apply $ns -f $yaml
+
+while [ ! -f gmx-$name.ret ]; do
+	ls . >/dev/null
+	sleep 2
+done
+kubectl logs job.batch/gmx-$name $ns
+
+cat gmx-$name.out 
+cat gmx-$name.err >&2
+ret=$(cat gmx-$name.ret)
+
+kubectl delete job.batch/gmx-$name $ns
+# rm $yaml gmx-$name.ret gmx-$name.out gmx-$name.err
+exit $ret

@@ -1,0 +1,144 @@
+#!/bin/bash
+
+set -- $(getopt xXn:l:s:t:u: "$@")
+
+label=
+size=20
+
+token=$(LC_CTYPE=C tr -cd '[:alnum:]' </dev/urandom | head -c 30)
+
+name=alphafold-cv-test
+IMAGE=ljocha/$name
+delete=0
+delete_volume=0
+while [ $1 != -- ]; do case $1 in
+        -n) ns="-n $2"; shift ;;
+        -l) label=-$2; shift ;;
+	-u) IMAGE=$2/$name shift ;;
+        -s) size=$2; shift ;;
+        -t) token=$2; shift ;;
+        -X) delete=1; delete_volume=1 ;;
+        -x) delete=1 ;;
+        esac
+        shift
+done
+
+if [ $delete = 1 ]; then
+        kubectl delete deployment.apps/$name$label $ns
+        kubectl delete service/$name-svc$label $ns
+        kubectl delete ingress.networking.k8s.io/$name-ingress$label $ns
+        if [ $delete_volume = 1 ]; then
+                kubectl delete pvc/$name-work$label $ns
+        fi
+        exit 0
+fi
+
+kubectl apply $ns -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: $name-work$label
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: ${size}Gi
+  # storageClassName: csi-nfs
+  # storageClassName: nfs-client
+  storageClassName: nfs-csi
+EOF
+
+kubectl apply $ns -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $name$label
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: $name$label
+  template:
+    metadata:
+      labels:
+        app: $name$label
+    spec:
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1002
+        fsGroup: 1002
+        fsGroupChangePolicy: "OnRootMismatch"
+      containers:
+      - name: $name
+        image: $IMAGE:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+        ports:
+          - containerPort: 9000
+        resources:
+          requests:
+            cpu: .2
+          limits:
+            cpu: 1
+        volumeMounts:
+          - mountPath: /work
+            name: $name-work-volume
+        command: ['/opt/app/start-notebook.sh', 'python3', '-m', 'notebook', '--ip', '0.0.0.0', '--port', '9000', '--NotebookApp.token=$token' ]
+        env:
+        - name: WORK_VOLUME
+          value: $name-work$label
+      volumes:
+        - name: $name-work-volume
+          persistentVolumeClaim:
+            claimName: $name-work$label
+EOF
+
+kubectl apply $ns -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: $name-ingress$label
+  annotations:
+    kuberentes.io/ingress.class: "nginx"
+    kubernetes.io/tls-acme: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    external-dns.alpha.kubernetes.io/target: k8s-public-u.cerit-sc.cz
+    nginx.ingress.kubernetes.io/proxy-body-size: 300m 
+spec:
+  tls:
+    - hosts:
+        - "$name$label.dyn.cerit-sc.cz"
+      secretName: $name$label-dyn-cerit-sc-cz-tls
+  rules:
+  - host: "$name$label.dyn.cerit-sc.cz"
+    http:
+      paths:
+      - backend:
+          service:
+            name: $name-svc$label
+            port:
+              number: 80
+        pathType: ImplementationSpecific
+EOF
+
+kubectl apply $ns -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $name-svc$label
+spec:
+  type: ClusterIP
+  ports:
+  - name: $name-port
+    port: 80
+    targetPort: 9000
+  selector:
+    app: $name$label
+EOF
+
+echo
+echo https://$name$label.dyn.cerit-sc.cz/?token=$token
+
+
+
