@@ -6,7 +6,7 @@
 
 IMAGE=ljocha/gromacs:2021-3
 
-name=$(LC_CTYPE=C tr -cd '[:digit:][:lower:]' </dev/urandom | head -c 9)
+name=$(LC_CTYPE=C tr -cd '[:digit:][:lower:]' </dev/urandom 2>/dev/null | head -c 9)
 yaml=/tmp/gmx-$name.yaml
 run=gmx-$name.sh
 
@@ -43,7 +43,7 @@ if [ "$1" = mdrun -o $(basename $0) = mdrun ]; then
 	GPU=1
 	omp=1
 	for a in "$@"; do
-		[ $omp = y ]; omp=$a
+		[ $omp = y ] && omp=$a
 		[ $a = -ntomp ] && omp=y
 	done
 	CPU=$(($omp * $mpi))
