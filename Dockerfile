@@ -22,7 +22,7 @@ RUN chown 1001:1001 /work
 
 RUN mkdir /opt/app
 
-COPY start-notebook.sh /opt/app
+COPY alphafold-cv-test.ipynb ions.mdp minim-sol.mdp npt.mdp nvt.mdp md.mdp.template gmx-k8s start-notebook.sh /opt/app
 ENV PATH /opt/app:${PATH}
 
 

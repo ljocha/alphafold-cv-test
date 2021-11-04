@@ -4,7 +4,7 @@
 #XXX
 [ -n "$K8S_NS" ] && ns="-n $K8S_NS"
 
-IMAGE=ljocha/gromacs:2021-3
+IMAGE=ljocha/gromacs:2021-3.1
 
 name=$(LC_CTYPE=C tr -cd '[:digit:][:lower:]' </dev/urandom 2>/dev/null | head -c 9)
 yaml=/tmp/gmx-$name.yaml
